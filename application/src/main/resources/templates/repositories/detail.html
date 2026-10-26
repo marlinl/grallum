@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1 th:text="${repository.imagePrefix}">
+      </h1>
+      <p th:text="${repository.mode}">
+      </p>
+      <nav>
+        <a th:href="@{/repositories/{id}/tags(id=${repository.id})}">本地标签</a>
+        <a th:href="@{/repositories/{id}/permissions(id=${repository.id})}">仓库授权</a>
+        <a th:href="@{/repositories/{id}/cleanup(id=${repository.id})}">清理策略</a>
+      </nav>
+    </main>
+    <footer>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期登录</button>
+      </form>
+      <form th:action="@{/auth/logout}" method="post">
+        <button>退出登录</button>
+      </form>
+    </footer>
+  </body>
+</html>

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1>清理策略</h1>
+      <form th:action="@{/repositories/{id}/cleanup/policy(id=${repositoryId})}" method="post">
+        <input type="hidden" name="expectedVersion" th:value="${policy.version}">
+        <label>保留最新标签数<input type="number" name="keepLatest" min="1" max="10000" th:value="${policy.keepLatest}" required>
+        </label>
+        <label>保留天数<input type="number" name="olderThanDays" min="1" max="36500" th:value="${policy.olderThanDays}" required>
+        </label>
+        <label>受保护标签（逗号分隔，支持 *）<input name="protectedPattern" maxlength="200" th:value="${policy.protectedPattern}">
+        </label>
+        <label>
+          <input type="hidden" name="_enabled" value="on">
+          <input type="checkbox" name="enabled" value="true" th:checked="${policy.enabled}">启用清理</label>
+        <button>保存策略</button>
+      </form>
+      <h2>预览与执行</h2>
+      <p>执行时会重新读取策略和镜像；预览不会删除镜像。</p>
+      <form th:action="@{/repositories/{id}/cleanup/preview(id=${repositoryId})}" method="post">
+        <button>预览候选</button>
+      </form>
+      <form th:action="@{/repositories/{id}/cleanup/run(id=${repositoryId})}" method="post">
+        <label>
+          <input type="checkbox" required>确认按照当前策略删除候选清单</label>
+        <button>执行清理</button>
+      </form>
+      <section th:if="${result != null}">
+        <h2>运行结果</h2>
+        <p>任务 <code th:text="${result.runId}">
+          </code>：<strong th:text="${result.status}">
+          </strong>
+        </p>
+        <h3>候选摘要</h3>
+        <ul>
+          <li th:each="digest : ${result.candidateDigests}">
+            <code th:text="${digest}">
+            </code>
+          </li>
+        </ul>
+        <h3>已确认删除或不存在</h3>
+        <ul>
+          <li th:each="digest : ${result.deletedDigests}">
+            <code th:text="${digest}">
+            </code>
+          </li>
+        </ul>
+        <ul>
+          <li th:each="failure : ${result.failures}" th:text="${failure.message}">
+          </li>
+        </ul>
+      </section>
+    </main>
+    <footer>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期登录</button>
+      </form>
+      <form th:action="@{/auth/logout}" method="post">
+        <button>退出登录</button>
+      </form>
+    </footer>
+  </body>
+</html>

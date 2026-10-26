@@ -1,0 +1,5 @@
+services:
+  application:
+    image: grallum-native
+    build:
+      dockerfile: Dockerfile.native

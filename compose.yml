@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:18.1-alpine
+    environment:
+      POSTGRES_DB: grallum
+      POSTGRES_USER: grallum
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-grallum-local}
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres:/var/lib/postgresql"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grallum"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  private:
+    image: registry:3.0.0
+    environment:
+      OTEL_TRACES_EXPORTER: none
+    ports: ["127.0.0.1:5001:5000"]
+    volumes:
+      - private:/var/lib/registry
+      - ./deploy/registry-private.yml:/etc/distribution/config.yml:ro
+  proxy:
+    image: registry:3.0.0
+    restart: unless-stopped
+    environment:
+      OTEL_TRACES_EXPORTER: none
+      HTTPS_PROXY: ${REGISTRY_HTTPS_PROXY:-}
+      HTTP_PROXY: ${REGISTRY_HTTP_PROXY:-}
+      NO_PROXY: localhost,127.0.0.1,private,postgres
+    ports: ["127.0.0.1:5002:5000"]
+    volumes:
+      - proxy:/var/lib/registry
+      - ./deploy/registry-proxy.yml:/etc/distribution/config.yml:ro
+  application:
+    profiles: ["app"]
+    user: "${APPLICATION_UID:-10001}"
+    volumes:
+      - ./.local/secrets:/run/grallum-secrets:ro
+    build:
+      context: ./application
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/grallum
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-grallum-local}
+      PRIVATE_REGISTRY_URL: http://private:5000
+      PROXY_REGISTRY_URL: http://proxy:5000
+      PROXY_MANAGEMENT_URL: http://proxy-admin:5000
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8080}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      JWT_PRIVATE_KEY_PATH: /run/grallum-secrets/jwt-private.pem
+      JWT_PUBLIC_KEY_PATH: /run/grallum-secrets/jwt-public.pem
+      CLEANUP_ZONE: ${CLEANUP_ZONE:-UTC}
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      private:
+        condition: service_started
+      proxy:
+        condition: service_started
+      proxy-admin:
+        condition: service_started
+  proxy-admin:
+    image: registry:3.0.0
+    environment:
+      OTEL_TRACES_EXPORTER: none
+    ports: ["127.0.0.1:5003:5000"]
+    volumes:
+      - proxy:/var/lib/registry
+      - ./deploy/registry-private.yml:/etc/distribution/config.yml:ro
+volumes:
+  postgres:
+  private:
+  proxy:

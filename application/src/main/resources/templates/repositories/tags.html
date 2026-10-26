@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1>本地镜像标签</h1>
+      <p>代理仓库仅显示已经缓存到本地的标签。</p>
+      <table>
+        <thead>
+          <tr>
+            <th>标签</th>
+            <th>摘要</th>
+            <th>首次观察</th>
+            <th>索引</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr th:each="tag : ${tags.items}">
+            <td th:text="${tag.tag}">
+            </td>
+            <td>
+              <code th:text="${tag.digest}">
+              </code>
+            </td>
+            <td th:text="${tag.firstSeen}">
+            </td>
+            <td th:text="${tag.index}">
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p th:if="${tagsEmpty}">本地没有标签。</p>
+      <a th:if="${nextCursor != null}" th:href="@{/repositories/{id}/tags(id=${repositoryId},last=${nextCursor})}">下一页</a>
+    </main>
+    <footer>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期登录</button>
+      </form>
+      <form th:action="@{/auth/logout}" method="post">
+        <button>退出登录</button>
+      </form>
+    </footer>
+  </body>
+</html>

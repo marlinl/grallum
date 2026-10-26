@@ -1,0 +1,14 @@
+application/target/
+.local/
+.DS_Store
+*.log
+.idea/
+*.iml
+/out/
+/target/
+
+.env
+.env.*
+secrets/
+__pycache__/
+*.pyc

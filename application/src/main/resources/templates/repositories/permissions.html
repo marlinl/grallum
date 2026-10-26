@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1>仓库授权</h1>
+      <table>
+        <thead>
+          <tr>
+            <th>用户</th>
+            <th>权限</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr th:each="grant : ${permissions}">
+            <td th:text="${grant.username}">
+            </td>
+            <td th:text="${grant.permission}">
+            </td>
+            <td>
+              <form th:action="@{/repositories/{id}/permissions/{username}/delete(id=${repositoryId},username=${grant.username})}" method="post">
+                <button>撤销</button>
+              </form>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <form th:action="@{/repositories/{id}/permissions(id=${repositoryId})}" method="post">
+        <label>用户名<input name="username" required>
+        </label>
+        <label>权限<select name="permission">
+            <option>READ</option>
+            <option>WRITE</option>
+            <option>MANAGE</option>
+          </select>
+        </label>
+        <button>保存授权</button>
+      </form>
+    </main>
+    <footer>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期登录</button>
+      </form>
+      <form th:action="@{/auth/logout}" method="post">
+        <button>退出登录</button>
+      </form>
+    </footer>
+  </body>
+</html>

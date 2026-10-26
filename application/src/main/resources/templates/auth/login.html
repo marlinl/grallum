@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1>登录</h1>
+      <form th:action="@{/login}" method="post">
+        <label>用户名<input name="username" autocomplete="username" required maxlength="64">
+        </label>
+        <label>密码<input name="password" type="password" autocomplete="current-password" required maxlength="72">
+        </label>
+        <button>登录</button>
+      </form>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期上次登录</button>
+      </form>
+    </main>
+  </body>
+</html>

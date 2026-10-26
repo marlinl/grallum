@@ -1,0 +1,17 @@
+FROM ghcr.io/graalvm/native-image-community:25-ol9 AS build
+ARG MAVEN_OPTS
+WORKDIR /build
+COPY --from=maven:3.9.12-eclipse-temurin-25 /usr/share/maven /opt/maven
+COPY pom.xml .
+COPY config config
+COPY src src
+RUN --mount=type=cache,id=grallum-maven,target=/root/.m2 /opt/maven/bin/mvn -B -ntp -Pnative -DskipTests native:compile
+# Native Image links zlib dynamically; distroless base does not ship it.
+RUN mkdir /native-libs && cp -L /usr/lib64/libz.so.1 /native-libs/libz.so.1
+FROM gcr.io/distroless/base-debian12:nonroot
+WORKDIR /app
+ENV LD_LIBRARY_PATH=/app/lib
+COPY --from=build /build/target/application /app/application
+COPY --from=build /native-libs /app/lib
+EXPOSE 8080
+ENTRYPOINT ["/app/application"]

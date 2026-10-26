@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Grallum Registry</title>
+    <link rel="stylesheet" th:href="@{/assets/style.css}">
+  </head>
+  <body>
+    <header>
+      <a href="/">Grallum Registry</a>
+      <nav>
+        <a href="/repositories">仓库</a>
+        <a href="/users">用户</a>
+      </nav>
+    </header>
+    <main>
+      <h1>用户管理</h1>
+      <section th:each="user : ${users}">
+        <h2 th:text="${user.username}">
+        </h2>
+        <form th:action="@{/users/{username}(username=${user.username})}" method="post">
+          <label>
+            <input type="hidden" name="_enabled" value="on">
+            <input type="checkbox" name="enabled" value="true" th:checked="${user.enabled}">启用</label>
+          <label>
+            <input type="hidden" name="_admin" value="on">
+            <input type="checkbox" name="admin" value="true" th:checked="${user.admin}">管理员</label>
+          <label>重置密码（留空保留）<input type="password" name="password" minlength="12" maxlength="72" autocomplete="new-password">
+          </label>
+          <button>保存用户</button>
+        </form>
+      </section>
+      <h2>创建用户</h2>
+      <form th:action="@{/users}" method="post">
+        <label>用户名<input name="username" required maxlength="64">
+        </label>
+        <label>密码<input type="password" name="password" required minlength="12" maxlength="72" autocomplete="new-password">
+        </label>
+        <label>
+          <input type="hidden" name="_admin" value="on">
+          <input type="checkbox" name="admin" value="true">管理员</label>
+        <button>创建用户</button>
+      </form>
+    </main>
+    <footer>
+      <form th:action="@{/auth/refresh}" method="post">
+        <button>续期登录</button>
+      </form>
+      <form th:action="@{/auth/logout}" method="post">
+        <button>退出登录</button>
+      </form>
+    </footer>
+  </body>
+</html>

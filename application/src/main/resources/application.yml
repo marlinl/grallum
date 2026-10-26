@@ -1,0 +1,56 @@
+server:
+  port: ${PORT:8080}
+  tomcat:
+    max-http-form-post-size: 2MB
+spring:
+  application:
+    name: application
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/grallum}
+    username: ${DATABASE_USER:grallum}
+    password: ${DATABASE_PASSWORD:grallum-local}
+  flyway:
+    enabled: true
+  threads:
+    virtual:
+      enabled: true
+  servlet:
+    multipart:
+      enabled: false
+springdoc:
+  swagger-ui:
+    csrf:
+      enabled: true
+app:
+  bootstrap:
+    username: ${ADMIN_USERNAME:admin}
+    password: ${ADMIN_PASSWORD:}
+  public-base-url: ${PUBLIC_BASE_URL:https://localhost}
+  security:
+    cookies:
+      secure: ${COOKIE_SECURE:true}
+    jwt:
+      issuer: ${JWT_ISSUER:grallum}
+      active-key-id: ${JWT_ACTIVE_KEY_ID:local-1}
+      private-key-location: ${JWT_PRIVATE_KEY_PATH:./secrets/jwt-private.pem}
+      verification-keys:
+        local-1: ${JWT_PUBLIC_KEY_PATH:./secrets/jwt-public.pem}
+    refresh:
+      absolute-ttl: 7d
+  cleanup:
+    cron: "${CLEANUP_CRON:0 0 3 * * *}"
+    zone: ${CLEANUP_ZONE:UTC}
+    scheduling-enabled: ${CLEANUP_SCHEDULING_ENABLED:true}
+  registry:
+    connect-timeout: 10s
+    metadata-timeout: 60s
+    transfer-timeout: 30m
+    metadata-max-bytes: 8388608
+  registries:
+    private:
+      url: ${PRIVATE_REGISTRY_URL:http://localhost:5001}
+      mode: PRIVATE
+    dockerhub:
+      url: ${PROXY_REGISTRY_URL:http://localhost:5002}
+      mode: PROXY
+      management-url: ${PROXY_MANAGEMENT_URL:http://localhost:5003}

@@ -1,10 +1,8 @@
 # 004 - Docker 镜像定时清理
 
-状态：**规范契约；分层实现已落地，具体验收与平台边界见 [验证记录](../verification.md)**。
-
-引用：[架构](../../ARCHITECTURE.md)、[001 仓库协调](001-docker-registry-controller.md)、
-[002 存储](002-local-image-storage.md)、[003 缓存](003-public-registry-api-proxy.md)、
-[005 身份和权限](005-user-login.md)。
+引用：[设计规范](../../DESIGN.md)、[架构](../../ARCHITECTURE.md)、[001 仓库协调](001_docker_registry_controller_design.md)、
+[002 存储](002_local_image_storage_design.md)、[003 缓存](003_public_registry_api_proxy_design.md)、
+[005 身份和权限](005_user_login_design.md)。
 
 ## Context
 
@@ -18,7 +16,7 @@
 | `com.grallum.application.controller.DockerCleanupController` | 清理与策略 REST 入口 | DockerCleanupService |
 | `com.grallum.application.controller.DockerCleanupPageController` | 策略表单、预览和执行结果页面 | DockerCleanupService |
 | `com.grallum.application.service.DockerCleanupService` | 权限、策略、快照、候选、删除及恢复用例 | UserAuthorizationService、DockerStorageService、DockerRepositoryLockService、DockerCleanupPolicyRepository、DockerCleanupRunRepository、DockerCleanupProgressService、Clock |
-| `com.grallum.application.service.DockerCleanupProgressService` | 独立短事务保存任务、删除确认和审计 | DockerCleanupRunRepository、DockerTagObservationRepository、AuditService |
+| `com.grallum.application.service.DockerCleanupProgressService` | 协调任务、删除确认和审计；事务由 Repository 持有 | DockerCleanupRunRepository、DockerTagObservationRepository、AuditService |
 | `com.grallum.application.task.DockerCleanupTask` | 按时区触发清理和恢复，不包含业务规则 | DockerCleanupService |
 | `com.grallum.application.repository.DockerCleanupPolicyRepository` | cleanup_policy 的读取和版本化保存 | JdbcClient |
 | `com.grallum.application.repository.DockerCleanupRunRepository` | 任务和逐摘要结果持久化 | JdbcClient |
@@ -28,6 +26,9 @@
 Task 不能查询数据库枚举任务，Controller 不能操作锁，Repository 不能决定哪个镜像应删除。
 
 ## Contract
+
+数据库定义以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为唯一依据。
+下文 entity 描述限定 Java 数据契约和使用方式，不另行定义数据库列语义。
 
 ### 对外 DTO 和业务模型
 
@@ -53,7 +54,8 @@ Task 不能查询数据库枚举任务，Controller 不能操作锁，Repository
 | `com.grallum.application.entity.DockerCleanupRunEntity` | id(UUID)、repositoryId、actor、dryRun、policyVersion、policySnapshot、status、startedAt、finishedAt、safeError |
 | `com.grallum.application.entity.DockerCleanupItemEntity` | runId、digest、status、confirmedAt、safeError；每任务/摘要唯一 |
 
-实体只用于 Repository，不能直接作为 JSON。新增任务表和策略版本通过 Flyway 新迁移，保留旧策略和观察记录。
+实体用于持久化和服务映射，不能直接作为 JSON。开发阶段直接修改对应建表/迁移脚本，保持执行顺序一致。
+数据库语义引用 [迁移 SQL](../../application/src/main/resources/db/migration/)；本设计不另行定义列约束。
 
 ### HTTP 与 Controller 方法
 
@@ -67,8 +69,7 @@ Task 不能查询数据库枚举任务，Controller 不能操作锁，Repository
 | POST `/repositories/{id}/cleanup/preview` | `public String preview(AuthenticatedUser user, long repositoryId, Model model);` | 渲染预览，CSRF 保护 |
 | POST `/repositories/{id}/cleanup/run` | `public String run(AuthenticatedUser user, long repositoryId, Model model);` | 独立确认表单，CSRF，执行重新判定 |
 
-Controller 只委托服务和映射视图。既有策略写接口新增 expectedVersion，调用方须读取 version 后提交，
-旧接口缺少该字段不能成为跳过并发校验的理由。
+Controller 只委托服务和映射视图。策略写入必须提交 expectedVersion；调用方先读取 version，冲突时重新读取。
 
 ### DockerCleanupService 方法
 
@@ -84,16 +85,16 @@ Controller 只委托服务和映射视图。既有策略写接口新增 expected
 | `DockerCleanupPlan plan(List<DockerTag> tags, CleanupPolicy policy, Instant now, Set<String> dependencies);` | 纯函数，无 SQL/网络/锁；不对外接受任意候选删除 |
 
 run/preview 不持有跨存储访问的 SQL 事务。Clock 注入决定 UTC 时间，测试固定时钟。
-目标从原有服务中移出调度注解和 SQL，不保留原有嵌套记录或 Store 参数作为业务接口。
+调度入口属于 Task，SQL 与事务属于 Repository；业务服务只使用已声明的类型化参数。
 
 ### 短事务与 Repository 方法
 
 | 所属类 | 精确声明 | 责任 |
 |---|---|---|
-| DockerCleanupProgressService | `public UUID create(DockerRepositoryRef repository, CleanupActor actor, boolean dryRun, CleanupPolicy policy);` | 短事务保存 PENDING 和策略快照 |
+| DockerCleanupProgressService | `public UUID create(DockerRepositoryRef repository, CleanupActor actor, boolean dryRun, CleanupPolicy policy);` | 委托 Repository 原子保存 PENDING 和策略快照 |
 | DockerCleanupProgressService | `public void start(UUID runId, DockerCleanupPlan plan);` | 保存候选并进入 RUNNING |
 | DockerCleanupProgressService | `public void intent(UUID runId, String digest);` | 外部删除前提交 INTENT |
-| DockerCleanupProgressService | `public void confirm(UUID runId, long repositoryId, String digest, DockerDeleteResult result);` | 同一短事务确认结果、删除观察和审计 |
+| DockerCleanupProgressService | `public void confirm(UUID runId, long repositoryId, String digest, DockerDeleteResult result);` | 委托 Repository 原子确认结果、删除观察和审计 |
 | DockerCleanupProgressService | `public void finish(UUID runId, CleanupRunStatus status, String safeError);` | 保存终态；主流程后续失败不能回滚已确认记录 |
 | DockerCleanupPolicyRepository | `public Optional<DockerCleanupPolicyEntity> findByRepositoryId(long repositoryId);` | 仅查数据，默认策略由服务提供 |
 | DockerCleanupPolicyRepository | `public boolean save(DockerCleanupPolicyEntity policy, long expectedVersion);` | 条件写入，成功递增版本；冲突 false |
@@ -108,8 +109,11 @@ run/preview 不持有跨存储访问的 SQL 事务。Clock 注入决定 UTC 时�
 | DockerCleanupTask | `public void execute();` | 仅调用 DockerCleanupService.runScheduled |
 | DockerCleanupTask | `public void recover();` | 仅调用 DockerCleanupService.recoverIncompleteRuns |
 
-ProgressService 是独立注入的事务组件，避免同类自调用绕过事务代理；它不调用外部存储。
-事务中的 Repository 方法组合负责数据一致性，失败向业务服务传播，不伪造外部存储回滚。
+ProgressService 是业务协调组件，不持有事务，也不调用外部存储。
+Repository 持有短事务；确认删除结果、清理观察和写入审计必须由一个 Repository 聚合入口原子提交。
+任务创建、候选及 RUNNING 保存、INTENT、确认和终态是各自明确的提交边界。
+现有细粒度 Repository 声明不能替代聚合入口；完整签名、参与写入和失败语义必须在实施前确认。
+失败向业务服务传播，不伪造外部存储回滚。CleanupProperties 由 AppConfig 使用 @Value 参数构造。
 
 ### 策略不变量和配置
 
@@ -164,7 +168,7 @@ sequenceDiagram
 ```
 
 图中的手动与调度是互斥入口，不是一次请求同时经过两者。预览与执行都重新读取当前状态，
-执行不接收客户端提交的旧计划。候选判断的内部实现不属于调用契约，保留结果的不变量属于契约。
+执行不接收客户端提交的旧计划。候选方法、关键分支和保留不变量均属于实现契约。
 
 ### 任务和恢复生命周期
 

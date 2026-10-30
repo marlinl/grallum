@@ -1,10 +1,8 @@
 # 003 - Docker 公共镜像代理
 
-状态：**规范契约；分层实现已落地，具体验收与平台边界见 [验证记录](../verification.md)**。
-
-引用：[架构](../../ARCHITECTURE.md)、[001 网关](001-docker-registry-controller.md)、
-[002 存储与模型](002-local-image-storage.md)、[004 清理](004-scheduled-cleanup.md)、
-[005 授权](005-user-login.md)、[Registry API SPEC](../spec/docker-registry-api.md)。
+引用：[设计规范](../../DESIGN.md)、[架构](../../ARCHITECTURE.md)、[001 网关](001_docker_registry_controller_design.md)、
+[002 存储与模型](002_local_image_storage_design.md)、[004 清理](004_scheduled_cleanup_design.md)、
+[005 授权](005_user_login_design.md)、[Registry API SPEC](../spec/docker-registry-api.md)。
 
 ## Context
 
@@ -27,6 +25,9 @@ HTTP 入口仍为 controller.DockerGatewayController，不再增加同职责代�
 共享 DTO、model 直接引用 001/002，不能复制一套名称不同但语义相同的数据类型。
 
 ## Contract
+
+数据库定义以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为唯一依据。
+下文 entity 描述限定 Java 数据契约和使用方式，不另行定义数据库列语义。
 
 ### Java 方法契约
 

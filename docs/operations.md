@@ -121,10 +121,24 @@ docker compose --profile app start application
 | Compose 读取 | 本机 `export APPLICATION_UID=$(id -u)`；挂载只读目录到 `/run/grallum-secrets` |
 | 生产 | 配置 HTTPS 公共 origin、Secure Cookie 和运行 UID 可读的私钥，不提交秘密到 Git |
 | 密钥轮换 | 外部 YAML 同时配置新 active-key-id、私钥和可信公钥 map；保留旧验签公钥至旧 token 最长有效期及偏差结束 |
-| V2 迁移 | 将账号主键和授权关联迁至稳定 UUID，保留账号哈希和授权；增加刷新与清理任务表 |
+| 既有脚本 | V1/V2 按顺序初始化；开发迭代修改对应脚本，不为每次设计修改追加版本 |
 | 旧客户端 | Session 重新登录；管理 Basic 改为 JSON 交换管理 JWT；Docker 跟随 Bearer challenge |
-| 升级运行环境 | 先备份数据库和镜像卷；停止旧网关后迁移并启动新版本，不能让旧代码继续使用 V2 schema |
+| 运行环境 | 修改过的开发脚本须在干净或已确认重建的本地库执行；生产升级方案单独制定 |
 | 清理恢复 | 重启后只对账未确认 INTENT，已存在内容标为 UNCERTAIN；不自动继续剩余候选删除 |
 | 验收隔离 | smoke 会创建唯一名称用户与镜像；`--age-fixtures` 仅限测试库，`--jdbc-url` 可指定独立 PostgreSQL |
 
 普通镜像请求不建立长数据库事务。不得通过删除失败回滚记录来掩盖已经发生的外部删除。
+
+## 开发阶段数据库流程
+
+开发阶段直接修改 `application/src/main/resources/db/migration/` 中对应的既有脚本，
+同步 SQL 注释、约束、回滚方案与测试，不因设计迭代追加版本。V1/V2 的执行顺序须保持一致。
+已执行过旧脚本的本地库不能直接假定可增量升级；先确认数据保留要求，再使用独立空库或已批准重建的项目库验证。
+不得通过 Flyway repair 或手改 checksum 掩盖脚本差异，不得重建共享 PostgreSQL 或其他项目数据库。
+文档变更不授权删除数据库。生产已应用迁移保持不可变，发布前另行定义并验证保留数据的升级方案。
+
+## 代码格式检查
+
+执行 `./scripts/lint.sh` 或 `mvn validate` 检查生产及测试 Java。
+自动格式化执行 `mvn -f application/pom.xml spotless:apply`，随后重新运行 lint。
+格式和依赖检查不代表完整声明、中文 Javadoc、事务归属或设计契约已经验收。

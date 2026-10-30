@@ -64,3 +64,43 @@ APP_URL=http://localhost:8080 node scripts/browser-smoke.cjs
 | 磁盘回收 | 已验证 manifest 逻辑删除；未运行离线 GC 或破坏性恢复 |
 
 升级前须备份，并停止旧网关后应用 V2 迁移；旧 Session 重新登录，旧管理 Basic 客户端改用显式 JWT 交换。
+
+## 2026-10-30 约束对齐审查
+
+本节记录文档约束调整与静态检查。上方 2026-10-26 的构建和运行结果仅对应当时源码，
+不证明当前新增的约束已在实现中满足。本次没有修改 Java、构建配置或 SQL，也没有重建或升级数据库。
+
+### 已完成的文档变更
+
+- 根 ARCHITECTURE/DESIGN 明确设计先于实现、全可见性声明、成员契约、方法表、调用链和证据边界。
+- 保留 JWT、entity 数据实体和 model 业务值；选择 AppConfig/WebConfig、@Value 与 Repository 事务所有权。
+- 开发迭代直接维护既有 SQL，禁止以修 checksum 掩盖差异；数据库重建仍需明确授权。
+- 五份组件设计迁入 docs/designs，使用三位编号、下划线主题和 `_design.md` 后缀；关联引用同步更新。
+- Registry 的业务角色、模式、alias、分页限额和部署约束归入 001；技术 SPEC 不再反向依赖组件设计。
+- 去除组件设计的实现状态横幅，保持历史验收记录独立。
+
+### 静态审查发现的契约与源码差距
+
+| 范围 | 差距与后续验收要求 |
+| --- | --- |
+| 配置类 | 当前存在 ApplicationConfig、SecurityConfig、OpenApiConfig、NativeConfig；须按契约收敛归属 |
+| 配置来源 | Application 仍扫描 ConfigurationProperties，五个 Properties 类型仍使用该注解 |
+| 事务 | 多个 Service 仍有 Transactional；源码未迁入 Repository 事务边界 |
+| JSON | DockerStorageService、DockerGatewayController 仍调用 readTree；尚未完成类型化协议绑定 |
+| 声明覆盖 | 001—005 尚缺完整构造器、私有方法、字段生命周期和有效注解契约；方法表仍有旧格式 |
+| 聚合事务 | 注册审计、刷新轮换、用户失效、策略审计、删除确认等尚需明确 Repository 聚合入口签名 |
+| 配置契约 | @Value 的逐项表达式、集合配置、不可变 holder 构造器及全部 Bean 签名尚需明确 |
+| 源码格式 | 中文 Javadoc、Objects 空值判断、显式 import、依赖命名及类型体布局未逐项验收 |
+| 数据库 | 本次未验证修改建表脚本后的重建、回滚或重初始化；未创建新的 SQL 版本 |
+| 组件排版 | 迁移前已有的长表格仍有超过 120 字符的行，不能据根文档检查宣称全库排版通过 |
+
+聚合事务不能通过把多个细粒度 Repository 方法分别标为事务来替代。
+必须先补齐并确认原子入口与调用链，保留用户更新/凭据失效、刷新重放撤销及删除确认的原子提交语义。
+上述缺项属于受影响实现的前置契约，不能以本次治理规则更新为由直接发明签名、字段或额外组件。
+
+### 本次检查边界
+
+检查 Markdown 本地文件链接和内部锚点、旧目录/文件名残留、设计编号与四章节顺序，
+以及根治理文档和独立 SPEC 的 120 字符限制；执行 git diff --check。
+以关键词搜索核对新配置/事务/迁移选择与下层设计是否矛盾，并静态查看相关源码声明。
+未运行 Maven、JVM、Native、数据库或真实 Docker 验收，不更新历史运行结论。

@@ -1,10 +1,8 @@
 # 001 - Docker 客户端网关与仓库入口
 
-状态：**规范契约；分层实现已落地，具体验收与平台边界见 [验证记录](../verification.md)**。
-
-引用：[架构](../../ARCHITECTURE.md)、[002 存储与共享模型](002-local-image-storage.md)、
-[003 代理](003-public-registry-api-proxy.md)、[004 清理](004-scheduled-cleanup.md)、
-[005 身份与授权](005-user-login.md)、[Registry API SPEC](../spec/docker-registry-api.md)。
+引用：[设计规范](../../DESIGN.md)、[架构](../../ARCHITECTURE.md)、[002 存储与共享模型](002_local_image_storage_design.md)、
+[003 代理](003_public_registry_api_proxy_design.md)、[004 清理](004_scheduled_cleanup_design.md)、
+[005 身份与授权](005_user_login_design.md)、[Registry API SPEC](../spec/docker-registry-api.md)。
 
 ## Context
 
@@ -31,9 +29,12 @@ DockerRepository、DockerProperties、DockerImageService 和仓库模型由 002 
 
 ## Contract
 
+数据库定义以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为唯一依据。
+下文 entity 描述限定 Java 数据契约和使用方式，不另行定义数据库列语义。
+
 ### HTTP 方法与业务分发
 
-协议方法、权限和状态码严格引用 [SPEC 方法表](../spec/docker-registry-api.md#supported-operations)，不得由旧实现覆盖。
+协议方法和状态码引用 [SPEC 方法表](../spec/docker-registry-api.md#supported-operations)；权限和模式限制由本设计定义。
 
 | 请求 | Controller → Service | 约束 |
 |---|---|---|
@@ -47,9 +48,63 @@ DockerRepository、DockerProperties、DockerImageService 和仓库模型由 002 
 
 同一列表/详情服务供 REST 和页面调用；浏览器写操作遵循 005 的 CSRF 规则。
 
+### Registry 协议集成与业务限制
+
+镜像字节由 Distribution 管理，PostgreSQL 只保存应用元数据。部署限单实例，存储端点位于内部网络。
+PRIVATE 提供本地存储，PROXY 提供公共镜像只读代理和缓存；公共代理禁止客户端写入。
+001 使用 005 提供的身份与授权，选择 002 存储或 003 代理；004 与在线请求共享仓库协调机制。
+管理页面采用 Spring MVC 和 Thymeleaf，与 REST 和定时入口共享业务服务。
+
+外部 `<name>` 固定为 `<alias>/<repository>`，例如 `private/team/app`、`dockerhub/library/alpine`。
+alias 只能选择可信配置中的后端；repository 必须已注册且已授权。外部链接保留 alias，后端路径才去掉 alias。
+公共地址来自可信配置，不能使用任意 Host 或转发头构造认证地址；内部存储地址不可对外暴露。
+
+Registry 只接受 REGISTRY audience 的 JWT。浏览器 Cookie、MANAGEMENT JWT 和资源请求 Basic 均不能替代。
+令牌交换地址为 `/auth/registry/token`，service 为 `grallum-registry`；Basic 仅用于 HTTPS 令牌交换。
+每次操作同时校验当前账号/授权与 token scope。pull 对应 READ，push 对应 WRITE，delete 对应 MANAGE；
+WRITE 包含 READ，MANAGE 包含 WRITE。管理员仍受仓库模式限制，权限撤销不等待 JWT 过期。
+
+下表保留业务操作与授权的完整映射。P 表示 PRIVATE，P/C 表示 PRIVATE 或 PROXY。
+技术路由、状态码和头部语义见 [SPEC](../spec/docker-registry-api.md#supported-operations)。
+
+| Method | Path below `/v2/` | Success | Required permission | Mode |
+|---|---|---|---|---|
+| GET, HEAD | empty path | 200 | Authenticated identity | P/C |
+| GET | `_catalog` | 200 | Filter by current READ grants | P/C |
+| GET | `<name>/tags/list` | 200 | READ / pull | P/C |
+| GET, HEAD | `<name>/manifests/<reference>` | 200 | READ / pull | P/C |
+| PUT | `<name>/manifests/<reference>` | 201 | WRITE / push | P |
+| DELETE | `<name>/manifests/<digest>` | 202 | MANAGE / delete | P |
+| GET, HEAD | `<name>/blobs/<digest>` | 200; ranged GET 206 | READ / pull | P/C |
+| DELETE | `<name>/blobs/<digest>` | 202 | MANAGE / delete | P |
+| POST | `<name>/blobs/uploads/` | 202; completed mount 201 | WRITE / push | P |
+| GET | `<name>/blobs/uploads/<uuid>` | 204 | WRITE / push | P |
+| PATCH | `<name>/blobs/uploads/<uuid>` | 202 | WRITE / push | P |
+| PUT | `<name>/blobs/uploads/<uuid>?digest=<digest>` | 201 | WRITE / push | P |
+| DELETE | `<name>/blobs/uploads/<uuid>` | 204 | WRITE / push | P |
+
+
+上传状态 GET 和取消 DELETE 属于 WRITE 工作流；取消上传不要求 MANAGE。
+对 PROXY 的已认证 `/v2/` 写入返回 405/UNSUPPORTED；本地缓存删除通过独立管理用例，不修改公共上游。
+删除 manifest 使用摘要，不接受标签；物理空间回收为离线操作，不直接删除共享 blob 文件。
+
+跨仓库 mount 同时要求源 READ/pull 与目标 WRITE/push，并且后端兼容；否则回退普通上传且不泄露源是否存在。
+from 使用外部带 alias 的名称，只能在校验后转换后端路径，不能把未经检查的 from 传给 Distribution。
+
+catalog 是当前用户已授权的注册仓库列表，不是未经筛选的后端目录；名称带 alias。
+PROXY 标签列表仅展示本地已知缓存，不列举全部上游标签。先筛选授权，再构造分页、游标和计数。
+分页默认 100、上限 1000，非法或超范围返回 400；n/last 按字典序，仍有可见页时返回 Link。
+分页不承诺并发快照，游标不能切换后端或提供任意 URL。
+
+未认证时，无论仓库是否存在均返回同样的 challenge；有效身份缺权限返回 403，不泄露内部错误。
+公共重定向与上游凭据由代理内部处理，客户端凭据不转发到公共上游。
+业务验收覆盖权限撤销、模式限制、alias 混淆、目录隐藏、缓存 miss/hit 和本地淘汰不修改上游。
+协议验收使用同一组场景分别验证 JVM 与 Native。
+
 ### 精确 Java 方法声明
 
-以下全部是目标签名，省略框架注解和实现体。各类型的完整包归属由本设计或引用设计给出，不能换成旧 Store 类型。
+以下声明限定调用接口；完整构造器、私有成员和有效框架注解同样必须遵守 [设计规范](../../DESIGN.md#contract-completeness)。
+类型包归属由本设计或引用设计定义，不能使用跨层持久化容器代替业务类型。
 
 | 类 | 方法声明 | 参数、结果和副作用 |
 |---|---|---|
@@ -63,11 +118,11 @@ DockerRepository、DockerProperties、DockerImageService 和仓库模型由 002 
 | DockerGatewayService | `public DockerResponse exchange(AuthenticatedUser user, DockerRequest request);` | 校验操作、当前授权、模式，持有仓库协调权，执行存储或代理业务 |
 | DockerRepositoryService | `public PageResponse<DockerRepositoryResponse> list(AuthenticatedUser user, PageQuery page);` | 当前账号检查、可见查询和 DTO 映射 |
 | DockerRepositoryService | `public DockerRepositoryResponse detail(AuthenticatedUser user, long repositoryId);` | 由授权服务得到允许访问的仓库，返回不含内部 URL 的 DTO |
-| DockerRepositoryService | `public DockerRepositoryResponse create(AuthenticatedUser user, DockerRepositoryRequest request);` | 管理员检查；短事务创建仓库与审计，重复注册返回冲突 |
+| DockerRepositoryService | `public DockerRepositoryResponse create(AuthenticatedUser user, DockerRepositoryRequest request);` | 管理员检查；委托 Repository 原子创建仓库与审计，重复注册返回冲突 |
 | DockerRepositoryLockService | `public DockerRepositoryLease acquire(long repositoryId, Duration timeout);` | 可中断、有界等待；超时和停机显式失败 |
 | DockerRepositoryLockService | `public Optional<DockerRepositoryLease> tryAcquire(long repositoryId);` | 供调度使用；被占用返回空，不排无限队列 |
 | DockerRepositoryLockService | `public void stopAccepting();` | 停机拒绝新工作，已有 lease 仍需释放 |
-| AuditService | `public void record(AuditEvent event);` | 独立短事务或加入现有短事务；不记录正文、凭据和 SQL |
+| AuditService | `public void record(AuditEvent event);` | 委托 AuditEventRepository 持久化；Service 不持有事务，不记录正文、凭据和 SQL |
 | AuditEventRepository | `public void insert(AuditEventEntity event);` | 仅参数化持久化，无授权或业务判断 |
 
 `HttpServletRequest/Response`、`Model` 仅出现在 controller 方法；service 方法不得使用 Servlet 或 Spring Authentication。
@@ -93,16 +148,17 @@ DockerRepository、DockerProperties、DockerImageService 和仓库模型由 002 
 
 ### 授权、资源与错误约定
 
-- UserAuthorizationService 先检查当前账号、签名范围和授权，再允许后端操作；隐藏仓库存在性遵循 SPEC。
+- UserAuthorizationService 先检查当前账号、签名范围和授权，再允许后端操作；未认证时不泄露仓库是否存在。
 - PRIVATE 选择 DockerStorageService，PROXY 选择 DockerProxyService；代理模式写入在网络请求前拒绝。
 - 输入流由 Servlet 容器拥有，服务只借用；返回 DockerResponse 的关闭责任交给 controller 的 finally/try-with-resources。
 - exchange 在返回前失败时自行释放 lease；返回成功后由 DockerResponse.close 释放。传输完成前不能提前解锁。
-- 默认单实例保守协调同仓库请求；PROXY GET 可能回填，必须与清理协调。跨仓库 mount 初始按 SPEC 回退普通上传。
+- 默认单实例保守协调同仓库请求；PROXY GET 可能回填，必须与清理协调。跨仓库 mount 不满足双向授权和后端兼容时回退普通上传。
 - Location/Link 改写到可信公共地址，保留查询状态；不转发客户端 Authorization/Cookie 或后端内部地址。
 - 后端成功但观察或审计失败不能伪装为存储回滚；记录待对账故障，不自动重放写操作。
 
-应移除现有控制器中的 SQL、后端 HTTP、锁操作和权限策略。现有合并管理入口须拆为对应业务 Controller，
-不是把旧类换个名称后继续保留全部职责。调用者继续使用 SPEC 路由，但错误格式、上传权限分类和分页须修正。
+Controller 只负责协议适配，不执行 SQL、后端 HTTP、锁操作或权限策略。
+仓库注册与审计要求同一 Repository 事务；跨表原子入口必须先在 Contract 中明确，不能由 Service 持有事务。
+业务顺序中的多个持久化调用不能解释为各自独立提交；具体聚合入口属于实施前必须解决的契约项。
 
 ## Core Logic
 
@@ -141,7 +197,7 @@ DockerRepositoryController.create
   -> DockerRepositoryService.create
      -> UserAuthorizationService.requireAdministrator
      -> DockerProperties 校验 alias
-     -> DockerRepository.insert + AuditService.record（同一短事务）
+     -> Repository 原子注册与审计边界（聚合签名须先确认；不能拆成两个独立提交）
      -> DockerRepositoryResponse
 
 DockerRepositoryPageController.list / DockerRepositoryController.list

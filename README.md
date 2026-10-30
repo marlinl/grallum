@@ -13,6 +13,9 @@ Java 25 / Spring Boot 4 的私有 Docker Registry 管理服务，支持 GraalVM 
 | API 文档 | `/swagger-ui.html` 与 `/v3/api-docs`，需要登录 |
 | 配置 | `application/src/main/resources/application.yml`；支持同名外部 YAML 和环境变量覆盖 |
 
+治理约束与当前实现的差距见 [验证记录](docs/verification.md#2026-10-30-约束对齐审查)。
+开发阶段直接维护既有建表/迁移脚本；运行前遵守 [数据库开发流程](docs/operations.md#开发阶段数据库流程)。
+
 ## IntelliJ IDEA 导入
 
 | 项目 | 设置 |
@@ -79,7 +82,7 @@ docker pull localhost:8080/dockerhub/library/hello-world:latest
 
 ## 构建与验证
 
-Java 使用 2 空格缩进、禁止硬 Tab、每行最多 120 字符；类型及方法必须有 Javadoc。
+Java 使用 2 空格缩进、禁止硬 Tab、每行最多 120 字符；显式类型、方法和构造器必须有中文 Javadoc。
 本地执行 `./scripts/lint.sh`，或 `mvn validate`。Checkstyle 绑定 Maven `validate`，构建时自动检查主代码和测试代码。
 自动格式化使用 `mvn -f application/pom.xml spotless:apply`，随后重新运行 lint。
 
@@ -117,6 +120,6 @@ node scripts/browser-smoke.cjs
 | 上游限制 | Docker Hub 匿名限流/网络故障原样影响拉取；代理页面仅列出本地缓存的标签 |
 | 备份 | 一起备份 PostgreSQL 和私有/代理两个镜像数据卷；密码及代理凭据不得提交 Git |
 
-架构与 Java 规范：[ARCHITECTURE.md](ARCHITECTURE.md)。产品设计总览：[DESIGN.md](DESIGN.md)，关联 `docs/design/001～999-*.md` 编号设计。协议：[Docker Registry API spec](docs/spec/docker-registry-api.md)。具体已执行验收与尚未验证的平台见验证记录；源码更新不会自动升级现有运行实例。
+架构与 Java 规范：[ARCHITECTURE.md](ARCHITECTURE.md)。设计规范：[DESIGN.md](DESIGN.md)，关联 `docs/designs/000_xxxxx_design.md` 编号设计。协议：[Docker Registry API spec](docs/spec/docker-registry-api.md)。具体已执行验收与尚未验证的平台见验证记录；源码更新不会自动升级现有运行实例。
 
 当前实现文档：[架构](docs/architecture.md) · [配置与运维](docs/operations.md) · [API 与权限](docs/api.md) · [验证记录](docs/verification.md)

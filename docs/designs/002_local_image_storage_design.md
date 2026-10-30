@@ -1,9 +1,7 @@
 # 002 - Docker 镜像本地存储
 
-状态：**规范契约；分层实现已落地，具体验收与平台边界见 [验证记录](../verification.md)**。
-
-引用：[架构](../../ARCHITECTURE.md)、[001 网关与仓库管理](001-docker-registry-controller.md)、
-[003 公共代理](003-public-registry-api-proxy.md)、[004 清理](004-scheduled-cleanup.md)、
+引用：[设计规范](../../DESIGN.md)、[架构](../../ARCHITECTURE.md)、[001 网关与仓库管理](001_docker_registry_controller_design.md)、
+[003 公共代理](003_public_registry_api_proxy_design.md)、[004 清理](004_scheduled_cleanup_design.md)、
 [Registry API SPEC](../spec/docker-registry-api.md)。
 
 ## Context
@@ -22,7 +20,7 @@ Distribution 管理镜像字节和内部布局，PostgreSQL 保存应用元数�
 | `com.grallum.application.repository.DockerTagObservationRepository` | tag_observation 的原子观察更新 | JdbcClient；不决定保留策略 |
 | `com.grallum.application.entity.DockerRepositoryEntity` | 注册仓库数据 | 仅数据库字段 |
 | `com.grallum.application.entity.DockerTagObservationEntity` | 标签观察数据 | 仅数据库字段 |
-| `com.grallum.application.config.DockerProperties` | 可信端点、模式、超时及元数据上限 | 配置绑定和启动校验 |
+| `com.grallum.application.config.DockerProperties` | 可信端点、模式、超时及元数据上限 | 由 AppConfig 使用 @Value 参数构造的不可变配置值；启动校验 |
 
 `DockerRepository` 是数据库访问类，名称中的 Repository 表示持久化职责；镜像存储业务由 DockerStorageService 执行。
 实体不得直接序列化给浏览器。配置不得由普通 API 请求更改为任意 URL。
@@ -35,6 +33,9 @@ Distribution 管理镜像字节和内部布局，PostgreSQL 保存应用元数�
 | 标签当前摘要观察时间 | DockerTagObservationRepository | PostgreSQL tag_observation |
 
 ## Contract
+
+数据库定义以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为唯一依据。
+下文 entity 描述限定 Java 数据契约和使用方式，不另行定义数据库列语义。
 
 ### 共享模型、实体和分页类型
 
@@ -83,7 +84,7 @@ DockerRequest/Response 由 001 定义。该服务不接受 Authentication、Serv
 `com.grallum.application.dto.DockerTagResponse` 字段为 `String tag, String digest, Instant firstSeen, boolean index`。
 分页查询只对本页调用 observeTag，绝不以一页结果调用 removeMissing；后者只用于完整快照。
 DockerRepositoryPageController.detail 同样调用 DockerImageService.tags 展示标签，不调用其他 Controller。
-该接口目标返回 PageResponse，旧实现的裸列表不再作为分页契约；客户端需要读取 items 和 next。
+返回 PageResponse；客户端读取 items 和 next，不能将响应解释为裸列表。
 
 ### Repository 精确方法
 
@@ -102,7 +103,9 @@ Controller 不得传一个 administrator=true 直接调用查询；控制器根�
 
 ### 配置和资源约束
 
-DockerProperties 绑定现有 `app.registries` 配置，并以类型化嵌套配置表示超时和大小限制；新增设置须明确绑定和验收。
+AppConfig 使用 `@Value` 注入 `app.registries` 相关配置，再构造不可变 DockerProperties。
+DockerProperties 不读取配置源，不使用 `@ConfigurationProperties`；超时、大小上限和端点均须声明类型、默认值及校验。
+集合配置的逐项注入表达式和完整构造签名必须在实施前明确，不允许用手动 Binder 绕过约束。
 
 | 配置或对象 | 约定 |
 |---|---|
@@ -114,7 +117,7 @@ DockerProperties 绑定现有 `app.registries` 配置，并以类型化嵌套配
 | 摘要和媒体类型 | 只支持 SPEC 的 SHA-256、Docker schema-2、OCI 镜像清单和索引 |
 | 删除 | 确认 202 为 DELETED；已确定本地路径的删除 404 可为 ALREADY_ABSENT；其余失败不能算成功 |
 | 锁 | 最外层网关/清理服务持有仓库 lease；本服务不重复获取，也不跨线程偷偷释放 |
-| 事务 | 观察操作为短数据库操作；不跨镜像请求持有 SQL 事务 |
+| 事务 | 观察写入由 Repository 持有短事务；不跨镜像请求持有 SQL 事务 |
 
 观察同步采用有界数据库操作；只有完整读取且更新成功后才移除缺失标签。
 若后端成功而观察写入失败，应留下待核对结果，不声称后端写入已撤销。
@@ -157,13 +160,13 @@ DockerCleanupService.preview/run
 
 DockerCleanupService.run
   -> DockerStorageService.deleteManifest（本地管理端点）
-  -> DockerCleanupService 的确认事务
+  -> Repository 的原子确认边界（见 004；聚合签名须先确认）
      -> DockerTagObservationRepository.deleteByDigest
      -> DockerCleanupRunRepository 记录确认 + AuditService.record
 ```
 
 PROXY 的元数据和删除始终选择共享缓存卷的内部管理 Distribution，它没有公共上游配置。
-新 Service 的签名不继承旧 Store.Repo 或 RegistryClient 的公开字符串转发方法；调用方需按目标模型迁移。
+Service 使用已声明的类型化业务模型，不接受持久化容器或任意字符串转发接口。
 
 ### 持久化生命周期
 

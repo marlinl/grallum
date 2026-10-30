@@ -1,9 +1,7 @@
 # 005 - 用户登录、JWT 与授权
 
-状态：**规范契约；分层实现已落地，具体验收与平台边界见 [验证记录](../verification.md)**。
-
-引用：[架构](../../ARCHITECTURE.md)、[001 Docker 入口](001-docker-registry-controller.md)、
-[002 仓库模型](002-local-image-storage.md)、[Registry 认证 SPEC](../spec/docker-registry-api.md#authentication)。
+引用：[设计规范](../../DESIGN.md)、[架构](../../ARCHITECTURE.md)、[001 Docker 入口](001_docker_registry_controller_design.md)、
+[002 仓库模型](002_local_image_storage_design.md)、[Registry 认证 SPEC](../spec/docker-registry-api.md#authentication)。
 
 ## Context
 
@@ -21,13 +19,13 @@
 | `com.grallum.application.service.UserAuthService` | 验证凭据、签发、认证、刷新和注销用例；依赖 UserRepository、UserTokenStateService、UserAuthorizationService、JwtTokenCodec、PasswordEncoder、Clock |
 | `com.grallum.application.service.UserAuthorizationService` | 当前账号、管理员和仓库权限决策；依赖 UserTokenStateService、UserRepository、UserPermissionRepository、DockerRepository、DockerProperties、AuditService |
 | `com.grallum.application.service.UserManagementService` | 创建/变更用户及凭据失效；依赖授权服务、UserRepository、UserTokenStateService、PasswordEncoder、AuditService |
-| `com.grallum.application.service.UserTokenStateService` | 登录族、刷新消费、撤销和凭据版本的短事务 |
+| `com.grallum.application.service.UserTokenStateService` | 登录族、刷新消费、撤销和凭据版本的业务协调；Repository 持有事务 |
 | `com.grallum.application.repository.UserRepository` | app_user 的参数化查询和更新；无 JWT 或权限策略 |
 | `com.grallum.application.repository.UserPermissionRepository` | repo_permission 的数据访问；无授权决策 |
 | `com.grallum.application.repository.UserTokenRepository` | 令牌族、刷新哈希、消费状态和撤销记录的数据访问 |
 | `com.grallum.application.security.JwtTokenCodec` | 用可信配置和标准 Spring Security JWT 组件签名/验签，不访问数据库 |
 | `com.grallum.application.security.JwtAuthenticationFilter` | 提取对应入口凭据，调用 UserAuthService，建立 Spring Security 上下文 |
-| `com.grallum.application.config.SecurityConfig` | 安全链、CSRF、入口匹配与密码编码配置 |
+| `com.grallum.application.config.WebConfig` | 安全链、CSRF、入口匹配与密码编码配置 |
 | `com.grallum.application.config.JwtProperties` | 签名配置、受众、令牌时限和刷新生命周期 |
 | `com.grallum.application.config.WebProperties` | 可信公共地址、Cookie 属性和站内重定向约束 |
 
@@ -35,6 +33,9 @@ UserTokenStateService 只依赖 UserRepository、UserTokenRepository、AuditServ
 认证业务不进入 Filter/Repository，密码学不进入 Controller，控制器不能直接更新用户表。
 
 ## Contract
+
+数据库定义以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为唯一依据。
+下文 entity 描述限定 Java 数据契约和使用方式，不另行定义数据库列语义。
 
 ### 对外 HTTP 契约
 
@@ -58,7 +59,7 @@ Registry 资源不接受 Cookie 或管理 JWT，管理资源不接受 Registry J
 |---|---|---|
 | `com.grallum.application.model.TokenAudience` | MANAGEMENT、REGISTRY | 映射 grallum-management / grallum-registry |
 | `com.grallum.application.model.RepositoryPermission` | READ、WRITE、MANAGE | 有序权限，分别包含较低权限 |
-| `com.grallum.application.model.RegistryAction` | PULL、PUSH、DELETE | 对应 SPEC action，不使用任意字符串扩权 |
+| `com.grallum.application.model.RegistryAction` | PULL、PUSH、DELETE | Registry action；业务权限映射由 001 定义，不使用任意字符串扩权 |
 | `com.grallum.application.model.RegistryScope` | `DockerRepositoryName repository, Set<RegistryAction> actions` | 解析后的请求范围 |
 | `com.grallum.application.model.RegistryGrant` | 同上 | 仅包含当前授权与请求范围交集 |
 | `com.grallum.application.model.JwtClaims` | `UUID subject, TokenAudience audience, long credentialVersion, UUID tokenId, Optional<UUID> familyId, Instant issuedAt, Instant notBefore, Instant expiresAt, List<RegistryGrant> grants` | 由服务签发或 Codec 验证后建立，不能从 JSON 直接绑定 |
@@ -90,8 +91,8 @@ Registry 资源不接受 Cookie 或管理 JWT，管理资源不接受 Registry J
 | `com.grallum.application.entity.UserRefreshTokenEntity` | id、familyId、secretHash、expiresAt、consumedAt、replacementId |
 | `com.grallum.application.entity.UserTokenRevocationEntity` | tokenId、expiresAt |
 
-通过新 Flyway 迁移为现有用户分配稳定 id，并迁移授权关联，保留用户名、密码哈希和权限。
-已有 Session 不转换为 JWT，客户端重新登录；内部身份不再用可重新分配的用户名作为 sub。
+账号使用稳定 UUID，JWT 的 sub 不使用可重新分配的用户名。开发阶段直接维护对应建表/迁移脚本。
+列定义及约束以 [迁移 SQL](../../application/src/main/resources/db/migration/) 为准；已有本地数据的保留或重建须单独确认。
 
 | 配置/声明 | 要求 |
 |---|---|
@@ -101,7 +102,7 @@ Registry 资源不接受 Cookie 或管理 JWT，管理资源不接受 Registry J
 | 刷新族 | 默认绝对有效期 7 天，随机秘密只保存哈希；过期消费记录保留到必要重放检测窗口结束 |
 | Cookie | HttpOnly、Secure、SameSite=Lax、host-only；访问 Cookie 使用 Path=/ 的 __Host- 名称，刷新 Cookie 限定认证路径 |
 | CSRF | 浏览器登录/刷新/注销及其他非安全请求均检查；Cookie JWT 不能关闭 CSRF |
-| 配置绑定 | JwtProperties 对应 app.security.jwt；RefreshProperties 对应 app.security.refresh；WebProperties 对应可信 public-base-url 和 Cookie 设置，实施时明确绑定而非静默默认 |
+| 配置绑定 | WebConfig 通过 @Value 注入 JWT、刷新与 Web 参数，构造对应不可变配置对象；对象不读取配置源 |
 | 生产边界 | 密钥缺失启动失败；仅显式回环开发配置允许非 Secure 开发 Cookie，生产不降级 |
 
 ### Controller 和安全入口方法
@@ -126,26 +127,26 @@ Registry 资源不接受 Cookie 或管理 JWT，管理资源不接受 Registry J
 
 scope 从 request.getParameterValues("scope") 逐项读取，不能让 Spring 把 action 中的逗号当作 List 参数分隔符。
 Controller 对 Basic 只做输入格式解析，不验证密码或扩大 scope。Web 类型仅用于 controller、security filter、exception 映射和 config 的 Web/Security 适配，不能进入业务 Service/Repository。
-SecurityConfig 分开匹配 Registry Bearer、管理 Cookie/Bearer 和显式凭据端点；不启用资源端点的 Basic 回退。
+WebConfig 分开匹配 Registry Bearer、管理 Cookie/Bearer 和显式凭据端点；不启用资源端点的 Basic 回退。
 访问 JWT 过滤不得阻断登录/刷新/注销的独立凭据流程；这些浏览器 POST 仍受 CSRF 保护。
 JWT 每次请求验签不能触发交互式登录的 CSRF 自动轮换；轮换由登录/刷新/退出控制器显式完成，
 静态资源读取不会使已经渲染的表单失效。凭据交换按账号哈希每分钟最多 30 次，最多保留 10000 个活动限流键；
 超过上限返回 429，限流数据不记录明文用户名、密码或刷新秘密。
 
-### SecurityConfig 方法与匹配顺序
+### WebConfig 方法与匹配顺序
 
-以下为包内配置 Bean 方法声明，均位于 config.SecurityConfig，不出现在业务 Service：
+以下为包内配置 Bean 方法声明，均位于 config.WebConfig，不出现在业务 Service：
 
 ```java
 SecurityFilterChain credentialSecurity(HttpSecurity http) throws Exception;
-SecurityFilterChain dockerSecurity(HttpSecurity http, UserAuthService service) throws Exception;
-SecurityFilterChain managementSecurity(HttpSecurity http, UserAuthService service) throws Exception;
+SecurityFilterChain dockerSecurity(HttpSecurity http, UserAuthService userAuthService) throws Exception;
+SecurityFilterChain managementSecurity(HttpSecurity http, UserAuthService userAuthService) throws Exception;
 PasswordEncoder passwordEncoder();
 ```
 
 credentialSecurity 优先匹配显式凭据端点；浏览器登录、刷新、注销保留 CSRF，仅非环境凭据的机器交换按独立规则处理。
 dockerSecurity 仅 /v2/**，配置 REGISTRY 过滤器和协议质询；managementSecurity 配置 MANAGEMENT 过滤器及页面/API错误区别。
-JwtAuthenticationFilter 的构造签名为 `public JwtAuthenticationFilter(UserAuthService service, TokenAudience audience, WebProperties web);`，
+JwtAuthenticationFilter 的构造签名为 `public JwtAuthenticationFilter(UserAuthService userAuthService, TokenAudience audience, WebProperties webProperties);`，
 audience 由配置固定，不能从请求参数选择。所有链不创建认证 HttpSession。
 
 ### 认证和授权 Service 方法
@@ -164,8 +165,8 @@ audience 由配置固定，不能从请求参数选择。所有链不创建认�
 | UserAuthorizationService | `public DockerRepositoryRef requireRepository(AuthenticatedUser user, long repositoryId, RepositoryPermission permission);` | 管理用例按 id 授权，返回规范仓库身份 |
 | UserAuthorizationService | `public List<RegistryGrant> registryGrants(UUID userId, List<RegistryScope> requested);` | 仅供已验证凭据的签发用例调用，不是资源访问授权捷径 |
 | UserAuthorizationService | `public List<UserPermissionResponse> permissions(AuthenticatedUser actor, long repositoryId);` | 当前 MANAGE，映射授权 DTO |
-| UserAuthorizationService | `public void grant(AuthenticatedUser actor, long repositoryId, UserPermissionRequest request);` | 当前 MANAGE，短事务授权与审计 |
-| UserAuthorizationService | `public void revoke(AuthenticatedUser actor, long repositoryId, String username);` | 当前 MANAGE，短事务撤销与审计 |
+| UserAuthorizationService | `public void grant(AuthenticatedUser actor, long repositoryId, UserPermissionRequest request);` | 当前 MANAGE，委托 Repository 原子保存授权与审计 |
+| UserAuthorizationService | `public void revoke(AuthenticatedUser actor, long repositoryId, String username);` | 当前 MANAGE，委托 Repository 原子撤销与审计 |
 | UserManagementService | `public List<UserResponse> list(AuthenticatedUser actor);` | 管理员读取无敏感字段 DTO |
 | UserManagementService | `public UserResponse create(AuthenticatedUser actor, UserCreateRequest request);` | 管理员检查、密码哈希、实体保存及审计 |
 | UserManagementService | `public UserResponse update(AuthenticatedUser actor, String username, UserUpdateRequest request);` | 当前管理员，禁止自我停用/降级；与凭据失效同一事务 |
@@ -176,17 +177,17 @@ audience 由配置固定，不能从请求参数选择。所有链不创建认�
 
 | 类 | 精确声明 | 数据与事务边界 |
 |---|---|---|
-| UserTokenStateService | `public RefreshSession openSession(UUID userId, long credentialVersion, String refreshHash, Instant expiresAt);` | 短事务重查账号/版本，创建族和首个秘密哈希 |
-| UserTokenStateService | `public RefreshRotation rotate(String presentedHash, String replacementHash, Instant now);` | 短事务串行消费；重放分支撤销族并正常返回 REPLAY，使事务提交 |
+| UserTokenStateService | `public RefreshSession openSession(UUID userId, long credentialVersion, String refreshHash, Instant expiresAt);` | 委托 Repository 原子重查账号/版本、创建族和首个秘密哈希 |
+| UserTokenStateService | `public RefreshRotation rotate(String presentedHash, String replacementHash, Instant now);` | Repository 串行消费；重放撤销提交后返回 REPLAY |
 | UserTokenStateService | `public void revokeFamily(String refreshHash, Instant now);` | 查对应族，撤销及审计；未知秘密幂等 |
-| UserTokenStateService | `public void invalidateUser(UUID userId);` | 版本递增和族撤销，加入用户更新事务 |
+| UserTokenStateService | `public void invalidateUser(UUID userId);` | 版本递增和族撤销须纳入用户更新的 Repository 原子入口 |
 | UserTokenStateService | `public UserEntity requireActive(JwtClaims claims);` | 内部服务读取当前账号、版本、撤销和族；返回实体仅供服务映射 |
 | UserRepository | `public Optional<UserEntity> findById(UUID id);` | 数据查询 |
 | UserRepository | `public Optional<UserEntity> findByUsername(String username);` | 数据查询，不产生 HTTP 错误 |
-| UserRepository | `public Optional<UserEntity> findByIdForUpdate(UUID id);` | 仅在服务短事务内使用 |
+| UserRepository | `public Optional<UserEntity> findByIdForUpdate(UUID id);` | 仅在 Repository 所有的短事务内使用 |
 | UserRepository | `public List<UserEntity> findAll();` | 内部管理查询，服务映射无秘密 DTO |
 | UserRepository | `public void insert(UserEntity user);` | 唯一用户名与稳定 id |
-| UserRepository | `public void update(UserEntity user);` | 服务持有必要事务和当前行锁 |
+| UserRepository | `public void update(UserEntity user);` | Repository 持有必要事务和当前行锁 |
 | UserRepository | `public void incrementCredentialVersion(UUID userId);` | 原子递增，不自行决定何时重置 |
 | UserPermissionRepository | `public Optional<UserPermissionEntity> find(UUID userId, long repositoryId);` | 当前授权记录 |
 | UserPermissionRepository | `public List<UserPermissionEntity> findByRepositoryId(long repositoryId);` | 已授权服务查询 |
@@ -195,8 +196,8 @@ audience 由配置固定，不能从请求参数选择。所有链不创建认�
 | UserTokenRepository | `public void insertFamily(UserRefreshFamilyEntity family);` | 保存登录族 |
 | UserTokenRepository | `public void insertRefreshToken(UserRefreshTokenEntity token);` | 只存秘密哈希，唯一约束防重复 |
 | UserTokenRepository | `public Optional<UserRefreshTokenEntity> findRefresh(String secretHash);` | 只读获取归属，消费前必须在锁内重读 |
-| UserTokenRepository | `public Optional<UserRefreshTokenEntity> findRefreshForUpdate(String secretHash);` | 服务事务内串行消费 |
-| UserTokenRepository | `public Optional<UserRefreshFamilyEntity> findFamilyForUpdate(UUID familyId);` | 服务事务内锁定族状态 |
+| UserTokenRepository | `public Optional<UserRefreshTokenEntity> findRefreshForUpdate(String secretHash);` | Repository 事务内串行消费 |
+| UserTokenRepository | `public Optional<UserRefreshFamilyEntity> findFamilyForUpdate(UUID familyId);` | Repository 事务内锁定族状态 |
 | UserTokenRepository | `public Optional<UserRefreshFamilyEntity> findFamily(UUID familyId);` | 族状态 |
 | UserTokenRepository | `public void consume(UUID tokenId, UUID replacementId, Instant consumedAt);` | 更新消费与替换关系 |
 | UserTokenRepository | `public void revokeFamily(UUID familyId, Instant revokedAt);` | 持久化撤销，不决定重放策略 |
@@ -206,7 +207,10 @@ audience 由配置固定，不能从请求参数选择。所有链不创建认�
 状态变更采用一致的锁顺序：用户行、令牌族、刷新记录。可先只读定位归属，但在该顺序加锁后必须重读状态；
 重置密码和刷新不能使用相反顺序。
 
-UserAuthService 不在整条认证请求上持有数据库事务；需要提交的状态由独立注入的 UserTokenStateService 完成。
+UserAuthService 和 UserTokenStateService 均不持有数据库事务。状态服务调用 Repository 原子入口，提交成功后交付结果。
+建族与首个 token、刷新消费与替换、重放撤销、用户更新与版本递增/族撤销分别保持既定原子性。
+授权变更与审计也必须由单个 Repository 事务提交，不能在两个独立事务之间返回成功。
+上述聚合入口的完整 Repository 签名、参与写入及锁顺序须在实施前确认；不得将现有多个写方法分别加事务代替。
 重放时若在事务内先撤销再抛可回滚异常，会使撤销丢失，此设计明确禁止这种调用顺序。
 
 ## Core Logic
@@ -251,7 +255,7 @@ Filter 不能直接访问 UserRepository，也不能因为 JWT 内有旧 admin �
 ### Docker 令牌链
 
 ```text
-/v2/** 未认证 → SecurityConfig 配置的 Bearer challenge
+/v2/** 未认证 → WebConfig 配置的 Bearer challenge
 → UserAuthController.registryToken（只解析 Basic、service、scope）
 → UserAuthService.registryToken → UserRepository 验证账号和密码
 → UserAuthorizationService.registryGrants → 当前权限和仓库模式交集
@@ -280,4 +284,5 @@ Filter 不能直接访问 UserRepository，也不能因为 JWT 内有旧 admin �
 
 验收覆盖无 JavaScript 页面、CSRF/Cookie/重定向、签名受众拒绝、并发刷新及撤销提交、用户状态变更、
 真实 Docker 登录推拉，并检查 controller/security filter 不访问数据库、repository 不包含认证决策。
-更新 config.OpenApiConfig 和 config.NativeConfig 的认证说明及绑定；JVM 和 Native 均须验收后才视为实现。
+WebConfig 负责认证与 OpenAPI 装配，AppConfig 负责原生元数据装配；不得增加独立配置类。
+JVM 和 Native 均须验收后才视为实现。
